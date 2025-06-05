@@ -6,8 +6,13 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import ttkbootstrap as ttkb
 from tkinter.scrolledtext import ScrolledText
+import subprocess
+import shutil
+import sys
+import winshell
+from win32com.client import Dispatch
 
-GITHUB_REPO_URL = "https://github.com/PanagiotisKotsorgios/vehicle_transportation_management_system.git"  # Replace with your actual repo
+GITHUB_REPO_URL = "https://github.com/PanagiotisKotsorgios/vehicle_transportation_management_system.git"
 
 class InstallerApp(ttkb.Window):
     def __init__(self):
@@ -123,7 +128,7 @@ class InstallerApp(ttkb.Window):
             return
 
         if self.step == 1 and not self.folder_path.get():
-            self.folder_path.set(os.path.expanduser("~\\AppData\\Local\\MyApp"))
+            self.folder_path.set(os.path.join(os.path.expanduser("~"), "AppData", "Local", "MyApp"))
 
         self.step += 1
         self.update_frame()
@@ -159,15 +164,68 @@ class InstallerApp(ttkb.Window):
             self.progress['value'] = percent
             self.log(f"[{time.strftime('%H:%M:%S')}] {step_msg}")
 
-        self.log(f"[{time.strftime('%H:%M:%S')}] Cloning repo from GitHub...")
-        time.sleep(random.uniform(1.0, 2.0))
-        self.log(f"[{time.strftime('%H:%M:%S')}] Simulated: Cloned {GITHUB_REPO_URL} to {self.folder_path.get()}")
-        self.log(f"[{time.strftime('%H:%M:%S')}] Installation completed successfully.")
+        install_dir = self.folder_path.get()
+        
+        # Create installation directory if it doesn't exist
+        os.makedirs(install_dir, exist_ok=True)
+        
+        self.log(f"[{time.strftime('%H:%M:%S')}] Cloning repository from GitHub...")
+        
+        try:
+            # Clone the repository
+            result = subprocess.run(
+                ["git", "clone", GITHUB_REPO_URL, install_dir],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=True
+            )
+            self.log(f"[{time.strftime('%H:%M:%S')}] Repository cloned successfully.")
+        except subprocess.CalledProcessError as e:
+            self.log(f"[{time.strftime('%H:%M:%S')}] ERROR: Failed to clone repository")
+            self.log(f"[{time.strftime('%H:%M:%S')}] Git output: {e.stderr}")
+            messagebox.showerror("Installation Error", "Failed to clone repository. Check logs for details.")
+            return
+        except Exception as e:
+            self.log(f"[{time.strftime('%H:%M:%S')}] ERROR: {str(e)}")
+            messagebox.showerror("Installation Error", f"An unexpected error occurred: {str(e)}")
+            return
 
+        self.log(f"[{time.strftime('%H:%M:%S')}] Installation completed successfully.")
         self.progress['value'] = 100
         time.sleep(1)
         self.step += 1  # move to post-install options
-        self.update_frame()
+        self.after(0, self.update_frame)
+
+    def create_desktop_shortcut(self, target_path, shortcut_name):
+        """Create a desktop shortcut to the specified file"""
+        try:
+            desktop = winshell.desktop()
+            shortcut_path = os.path.join(desktop, f"{shortcut_name}.lnk")
+            
+            shell = Dispatch('WScript.Shell')
+            shortcut = shell.CreateShortCut(shortcut_path)
+            shortcut.TargetPath = target_path
+            shortcut.WorkingDirectory = os.path.dirname(target_path)
+            shortcut.save()
+            return True
+        except Exception as e:
+            self.log(f"[{time.strftime('%H:%M:%S')}] ERROR creating shortcut: {str(e)}")
+            return False
+
+    def launch_application(self, app_path):
+        """Launch the application after installation"""
+        try:
+            if sys.platform == "win32":
+                os.startfile(app_path)
+            elif sys.platform == "darwin":  # macOS
+                subprocess.Popen(["open", app_path])
+            else:  # Linux
+                subprocess.Popen(["xdg-open", app_path])
+            return True
+        except Exception as e:
+            self.log(f"[{time.strftime('%H:%M:%S')}] ERROR launching application: {str(e)}")
+            return False
 
     def log(self, message):
         self.log_text.config(state='normal')
@@ -176,10 +234,26 @@ class InstallerApp(ttkb.Window):
         self.log_text.config(state='disabled')
 
     def finish_app(self):
+        install_dir = self.folder_path.get()
+        
+        # REPLACE WITH YOUR ACTUAL TARGET FILE
+        target_file = os.path.join(install_dir, "main.py")
+        
+        # Create desktop shortcut if requested
         if self.shortcut_var.get():
-            self.log(f"[{time.strftime('%H:%M:%S')}] (Simulated) Desktop shortcut created.")
+            success = self.create_desktop_shortcut(target_file, "MyApp")
+            if success:
+                self.log(f"[{time.strftime('%H:%M:%S')}] Desktop shortcut created successfully.")
+            else:
+                self.log(f"[{time.strftime('%H:%M:%S')}] Failed to create desktop shortcut.")
+        
+        # Launch application if requested
         if self.run_after_var.get():
-            self.log(f"[{time.strftime('%H:%M:%S')}] (Simulated) Launching application...")
+            success = self.launch_application(target_file)
+            if success:
+                self.log(f"[{time.strftime('%H:%M:%S')}] Application launched successfully.")
+            else:
+                self.log(f"[{time.strftime('%H:%M:%S')}] Failed to launch application.")
 
         messagebox.showinfo("Setup Complete", "Installation is complete. You may now close this window.")
         self.step += 1
