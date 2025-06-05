@@ -2,813 +2,1479 @@ import sys
 import json
 import os
 import datetime
-from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QMessageBox, QFileDialog, QTabWidget, QTableWidget,
-    QTableWidgetItem, QDateEdit, QTimeEdit, QTextEdit, QComboBox, QHeaderView
-)
-from PyQt5.QtCore import Qt, QDate, QTimer
-from PyQt5.QtGui import QPainter, QPixmap, QPen, QFont, QColor
-
+import shutil
+import tkinter as tk
+from tkinter import ttk
+from tkinter import messagebox, filedialog
+from tkinter.scrolledtext import ScrolledText
+from PIL import Image, ImageDraw, ImageTk
 from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
+# Constants
 DATA_DIR = 'vehicle_data'
-BACKUP_DIR = 'vehicle_backup'
+BACKUP_DIR = 'vehicle_backups'
+LOG_FILE = 'app_log.txt'
 
 def ensure_dirs():
+    """Create necessary directories if they don't exist"""
     os.makedirs(DATA_DIR, exist_ok=True)
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
 def save_json(filename, data):
-    with open(os.path.join(DATA_DIR, filename), 'w', encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    """Save data to JSON file with error handling"""
+    try:
+        with open(os.path.join(DATA_DIR, filename), 'w', encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        log_error(f"Error saving {filename}: {str(e)}")
+        messagebox.showerror("Σφάλμα αποθήκευσης δεδομένων", f"Σφάλμα αρχείου: {str(e)}")
+        return False
 
 def load_json(filename):
+    """Load data from JSON file with error handling"""
     try:
-        with open(os.path.join(DATA_DIR, filename), encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
+        filepath = os.path.join(DATA_DIR, filename)
+        if os.path.exists(filepath):
+            with open(filepath, encoding="utf-8") as f:
+                data = json.load(f)
+                
+                # Migrate old data format if needed
+                if filename == 'drivers.json' and data and 'id' not in data[0]:
+                    for i, item in enumerate(data):
+                        item['id'] = i + 1
+                    save_json(filename, data)
+                    
+                elif filename == 'vehicles.json' and data and 'id' not in data[0]:
+                    for i, item in enumerate(data):
+                        item['id'] = i + 1
+                    save_json(filename, data)
+                    
+                elif filename == 'trips.json' and data and 'id' not in data[0]:
+                    for i, item in enumerate(data):
+                        item['id'] = i + 1
+                    save_json(filename, data)
+                    
+                elif filename == 'services.json' and data and 'id' not in data[0]:
+                    for i, item in enumerate(data):
+                        item['id'] = i + 1
+                    save_json(filename, data)
+                
+                return data
+        return []
+    except Exception as e:
+        log_error(f"Error loading {filename}: {str(e)}")
+        messagebox.showerror("Σφάλμα φόρτωσης δεδομένων", f"Σφάλμα αρχείου: {str(e)}")
         return []
 
+def log_error(message):
+    """Log errors to file with timestamp"""
+    try:
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(LOG_FILE, 'a', encoding="utf-8") as f:
+            f.write(f"[{timestamp}] {message}\n")
+    except:
+        pass  # Avoid crashing if logging fails
+
 def backup_all_data(destination_folder):
-    for fname in os.listdir(DATA_DIR):
-        src = os.path.join(DATA_DIR, fname)
-        dst = os.path.join(destination_folder, fname)
-        with open(src, 'rb') as fsrc, open(dst, 'wb') as fdst:
-            fdst.write(fsrc.read())
+    """Backup data to specified folder with error handling"""
+    try:
+        os.makedirs(destination_folder, exist_ok=True)
+        for fname in os.listdir(DATA_DIR):
+            src = os.path.join(DATA_DIR, fname)
+            if os.path.isfile(src):
+                dst = os.path.join(destination_folder, fname)
+                shutil.copy2(src, dst)
+        return True
+    except Exception as e:
+        log_error(f"Backup error: {str(e)}")
+        messagebox.showerror("Σφάλμα Backup", f"Σφάλμα κατά τη δημιουργίας backup: {str(e)}")
+        return False
 
 def import_all_data(source_folder):
-    imported = []
-    for fname in os.listdir(source_folder):
-        src = os.path.join(source_folder, fname)
-        dst = os.path.join(DATA_DIR, fname)
-        if os.path.isfile(src):
-            with open(src, 'rb') as fsrc, open(dst, 'wb') as fdst:
-                fdst.write(fsrc.read())
-            imported.append(fname)
-    return imported
+    """Import data from backup folder with error handling"""
+    try:
+        imported = []
+        for fname in os.listdir(source_folder):
+            src = os.path.join(source_folder, fname)
+            if os.path.isfile(src) and fname.endswith('.json'):
+                dst = os.path.join(DATA_DIR, fname)
+                shutil.copy2(src, dst)
+                imported.append(fname)
+        return imported
+    except Exception as e:
+        log_error(f"Import error: {str(e)}")
+        messagebox.showerror("Σφάλμα Εισαγωγής", f"Σφάλμα κατά την εισαγωγή δεδομένων: {str(e)}")
+        return []
 
-class SignaturePad(QWidget):
-    def __init__(self):
-        super().__init__()
-        self.setFixedSize(340, 110)
-        self.pixmap = QPixmap(340, 110)
-        self.pixmap.fill(Qt.white)
+def validate_date(date_str):
+    """Validate date format (YYYY-MM-DD)"""
+    try:
+        datetime.datetime.strptime(date_str, '%Y-%m-%d')
+        return True
+    except ValueError:
+        return False
+
+def validate_time(time_str):
+    """Validate time format (HH:MM)"""
+    try:
+        datetime.datetime.strptime(time_str, '%H:%M')
+        return True
+    except ValueError:
+        return False
+
+class SignaturePad(tk.Canvas):
+    def __init__(self, master, width=400, height=180, **kwargs):
+        super().__init__(master, width=width, height=height, bg='white', 
+                         bd=0, highlightthickness=1, relief='ridge', **kwargs)
+        self.width = width
+        self.height = height
+        self.image = Image.new('RGB', (width, height), 'white')
+        self.draw = ImageDraw.Draw(self.image)
         self.last_point = None
+        self.bind("<Button-1>", self.start_draw)
+        self.bind("<B1-Motion>", self.draw_motion)
+        self.bind("<ButtonRelease-1>", self.end_draw)
+        self.tk_image = None  # Keep reference to prevent garbage collection
 
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.drawPixmap(0, 0, self.pixmap)
+    def start_draw(self, event):
+        self.last_point = (event.x, event.y)
 
-    def mousePressEvent(self, event):
-        self.last_point = event.pos()
+    def draw_motion(self, event):
+        if self.last_point:
+            self.create_line(self.last_point[0], self.last_point[1], event.x, event.y, 
+                            fill='#222', width=2)
+            self.draw.line([self.last_point, (event.x, event.y)], fill='#222', width=2)
+            self.last_point = (event.x, event.y)
 
-    def mouseMoveEvent(self, event):
-        if self.last_point is not None:
-            painter = QPainter(self.pixmap)
-            pen = QPen(Qt.black, 2)
-            painter.setPen(pen)
-            painter.drawLine(self.last_point, event.pos())
-            self.last_point = event.pos()
-            self.update()
-
-    def mouseReleaseEvent(self, event):
+    def end_draw(self, event):
         self.last_point = None
 
     def clear(self):
-        self.pixmap.fill(Qt.white)
-        self.update()
+        self.delete('all')
+        self.image = Image.new('RGB', (self.width, self.height), 'white')
+        self.draw = ImageDraw.Draw(self.image)
 
     def save(self, filename):
-        self.pixmap.save(filename)
+        try:
+            self.image.save(filename)
+            return True
+        except Exception as e:
+            log_error(f"Signature save error: {str(e)}")
+            return False
 
-class ModernTable(QTableWidget):
-    def __init__(self, rows, cols):
-        super().__init__(rows, cols)
-        self.setAlternatingRowColors(True)
-        self.setStyleSheet("""
-            QTableWidget {
-                border-radius: 8px;
-                border: 1px solid #dddddd;
-                font-size: 13px;
-                background: #fafbfc;
-            }
-            QHeaderView::section {
-                background: #f6f8fa;
-                font-weight: bold;
-                font-size: 13px;
-            }
-            QTableWidget::item {
-                padding: 3px;
-            }
-        """)
-        self.horizontalHeader().setStretchLastSection(True)
-        self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.verticalHeader().setVisible(False)
-        self.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.setSelectionBehavior(QTableWidget.SelectRows)
-        self.setSelectionMode(QTableWidget.SingleSelection)
+    def load(self, filename):
+        if os.path.exists(filename):
+            try:
+                img = Image.open(filename)
+                self.image.paste(img)
+                self.draw = ImageDraw.Draw(self.image)
+                self.delete('all')
+                self.tk_image = ImageTk.PhotoImage(img)
+                self.create_image(0, 0, image=self.tk_image, anchor='nw')
+                return True
+            except Exception as e:
+                log_error(f"Signature load error: {str(e)}")
+        return False
 
-class SignatureDialog(QWidget):
-    def __init__(self, parent=None, initial_signature=None):
-        super().__init__(parent)
-        self.setWindowTitle("Υπογραφή")
-        self.layout = QVBoxLayout(self)
-        self.sig_pad = SignaturePad()
-        if initial_signature and os.path.exists(initial_signature):
-            self.sig_pad.pixmap.load(initial_signature)
-        self.layout.addWidget(self.sig_pad)
-        btn_row = QHBoxLayout()
-        self.save_btn = QPushButton("Αποθήκευση")
-        self.cancel_btn = QPushButton("Ακύρωση")
-        self.clear_btn = QPushButton("Καθαρισμός")
-        btn_row.addWidget(self.save_btn)
-        btn_row.addWidget(self.cancel_btn)
-        btn_row.addWidget(self.clear_btn)
-        self.layout.addLayout(btn_row)
-        self.save_btn.clicked.connect(self.accept)
-        self.cancel_btn.clicked.connect(self.reject)
-        self.clear_btn.clicked.connect(self.sig_pad.clear)
-        self.result = None
-
-    def accept(self):
-        self.result = True
-        self.hide()
-
-    def reject(self):
-        self.result = False
-        self.hide()
-
-class VehicleManager(QMainWindow):
+class VehicleManager(tk.Tk):
     def __init__(self):
         super().__init__()
         ensure_dirs()
-        self.setWindowTitle("Διαχείριση Κίνησης Οχημάτων")
-        self.resize(1300, 770)
-        self.setStyleSheet("""
-            QMainWindow, QWidget {
-                background: #f4f7fb;
-            }
-            QLabel {
-                font-size: 15px;
-            }
-            QPushButton {
-                background: #2563eb;
-                color: #fff;
-                border-radius: 6px;
-                padding: 7px 14px;
-                font-size: 15px;
-                font-weight: 500;
-            }
-            QPushButton:hover {
-                background: #1741a7;
-            }
-            QLineEdit, QTextEdit, QDateEdit, QTimeEdit, QComboBox {
-                background: #fff;
-                border: 1px solid #cfd8dc;
-                border-radius: 5px;
-                padding: 5px;
-                font-size: 15px;
-            }
-            QComboBox QAbstractItemView {
-                background: #2563eb;
-                color: white;
-                selection-background-color: #1741a7;
-                selection-color: white;
-                font-size: 15px;
-            }
-            QTabBar::tab {
-                background: #e5e9f2;
-                padding: 10px 25px;
-                border-top-left-radius: 8px;
-                border-top-right-radius: 8px;
-                font-size: 16px;
-                min-width: 140px;
-            }
-            QTabBar::tab:selected {
-                background: #2563eb;
-                color: #fff;
-            }
-        """)
-        self.tabs = QTabWidget()
-        self.setCentralWidget(self.tabs)
-
+        
+        # Application setup
+        self.title("Διαχείριση Κίνησης Οχημάτων")
+        self.geometry("1400x900")
+        self.minsize(1200, 750)
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+        
+        # Set application font
+        self.font = ("Segoe UI", 12)
+        self.title_font = ("Segoe UI", 16, "bold")
+        
+        # Create notebook for tabs
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill='both', expand=True, padx=12, pady=8)
+        
+        # Initialize data
         self.drivers = load_json('drivers.json')
         self.vehicles = load_json('vehicles.json')
         self.trips = load_json('trips.json')
         self.services = load_json('services.json')
-
+        
+        # State variables
         self.edit_driver_row = None
         self.edit_vehicle_row = None
         self.edit_trip_row = None
         self.edit_service_row = None
-        self.temp_signature_file = None
+        
+        # Create tabs
+        self.create_tabs()
+        
+        # Start periodic KΤΕΟ check
+        self.after(1000, self.check_kteo_dates)
 
-        self.tabs.addTab(self.driver_tab(), "Οδηγοί")
-        self.tabs.addTab(self.vehicle_tab(), "Οχήματα")
-        self.tabs.addTab(self.trip_tab(), "Διαδρομές")
-        self.tabs.addTab(self.service_tab(), "Service")
-        self.tabs.addTab(self.search_tab(), "Αναζήτηση")
-        self.tabs.addTab(self.backup_tab(), "Backup / Import")
+    def create_tabs(self):
+        """Create all application tabs"""
+        self.driver_tab()
+        self.vehicle_tab()
+        self.trip_tab()
+        self.service_tab()
+        self.search_tab()
+        self.backup_tab()
+        self.about_tab()
 
-        self.warning_timer = QTimer(self)
-        self.warning_timer.timeout.connect(self.check_kteo_dates)
-        self.warning_timer.start(60 * 60 * 1000)
-        self.check_kteo_dates()
+    def create_scrollable_table(self, parent, columns, height=10):
+        """Create a frame with treeview and scrollbars"""
+        frame = ttk.Frame(parent)
+        frame.pack(fill='both', expand=True, padx=8, pady=6)
+        
+        # Create Treeview
+        tree = ttk.Treeview(frame, columns=columns, show="headings", height=height, selectmode="browse")
+        
+        # Create Scrollbars
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+        hsb = ttk.Scrollbar(frame, orient="horizontal", command=tree.xview)
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        
+        # Grid layout
+        tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        
+        # Configure grid weights
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(0, weight=1)
+        
+        return tree
 
-    # --- Driver Tab (with live update in comboboxes) ---
     def driver_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout()
-        title = QLabel("Διαχείριση Οδηγών")
-        title.setFont(QFont("Arial", 18, QFont.Bold))
-        layout.addWidget(title)
-        layout.addSpacing(8)
-        form = QHBoxLayout()
-        self.driver_name = QLineEdit()
-        self.driver_name.setPlaceholderText("Όνομα Οδηγού")
-        self.driver_add_btn = QPushButton("➕ Καταχώρηση Οδηγού")
-        self.driver_add_btn.clicked.connect(self.add_driver)
-        form.addWidget(self.driver_name)
-        form.addWidget(self.driver_add_btn)
-        layout.addLayout(form)
-        layout.addSpacing(8)
-        self.driver_table = ModernTable(0, 3)
-        self.driver_table.setHorizontalHeaderLabels(['Όνομα', 'Επεξεργασία', 'Διαγραφή'])
-        layout.addWidget(self.driver_table)
-        w.setLayout(layout)
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Οδηγοί")
+        
+        # Title
+        title_frame = ttk.Frame(frame)
+        title_frame.pack(fill='x', pady=(0, 10))
+        tk.Label(title_frame, text="Διαχείριση Οδηγών", font=self.title_font).pack(side='left', padx=12, pady=8)
+        
+        # Form
+        form = ttk.Frame(frame)
+        form.pack(fill='x', padx=12, pady=8)
+        
+        tk.Label(form, text="Όνομα Οδηγού:", width=15).pack(side='left')
+        self.driver_name = ttk.Entry(form, width=30)
+        self.driver_name.pack(side='left', padx=8)
+        
+        btn_frame = ttk.Frame(form)
+        btn_frame.pack(side='right', padx=20)
+        self.driver_add_btn = ttk.Button(btn_frame, text="➕ Καταχώρηση", command=self.add_driver)
+        self.driver_add_btn.pack(side='left', padx=5)
+        
+        # Table
+        self.driver_table = self.create_scrollable_table(frame, ("id", "Όνομα", "Επεξεργασία", "Διαγραφή"))
+        self.driver_table.heading("id", text="ID", anchor='center')
+        self.driver_table.heading("Όνομα", text="Όνομα Οδηγού", anchor='w')
+        self.driver_table.heading("Επεξεργασία", text="Επεξεργασία", anchor='center')
+        self.driver_table.heading("Διαγραφή", text="Διαγραφή", anchor='center')
+        
+        # Set column widths
+        self.driver_table.column("id", width=50, anchor='center', stretch=False)
+        self.driver_table.column("Όνομα", width=400, anchor='w')
+        self.driver_table.column("Επεξεργασία", width=140, anchor='center')
+        self.driver_table.column("Διαγραφή", width=140, anchor='center')
+        self.driver_table["displaycolumns"] = ("Όνομα", "Επεξεργασία", "Διαγραφή")
+        
+        self.driver_table.bind('<Button-1>', self.driver_table_action)
         self.refresh_driver_table()
-        return w
 
     def add_driver(self):
-        name = self.driver_name.text().strip()
+        name = self.driver_name.get().strip()
         if not name:
-            QMessageBox.warning(self, "Σφάλμα", "Συμπληρώστε όνομα οδηγού.")
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Συμπληρώστε όνομα οδηγού")
             return
-        self.drivers.append({'name': name})
-        save_json('drivers.json', self.drivers)
-        self.driver_name.clear()
-        self.refresh_driver_table()
-        self.update_driver_comboboxes()
+        
+        # Check for duplicate names
+        if any(d['name'].lower() == name.lower() for d in self.drivers):
+            messagebox.showwarning("Duplicate", "Ο οδηγός υπάρχει ήδη στο σύστημα")
+            return
+            
+        # Generate new ID
+        new_id = max([d['id'] for d in self.drivers]) + 1 if self.drivers else 1
+            
+        self.drivers.append({'id': new_id, 'name': name})
+        if save_json('drivers.json', self.drivers):
+            self.driver_name.delete(0, 'end')
+            self.refresh_driver_table()
+            self.update_driver_comboboxes()
+            messagebox.showinfo("Επιτυχία", "Ο οδηγός καταχωρήθηκε επιτυχώς")
+
+    def driver_table_action(self, event):
+        item = self.driver_table.identify_row(event.y)
+        if not item: return
+        
+        col = self.driver_table.identify_column(event.x)
+        values = self.driver_table.item(item, 'values')
+        row_id = int(values[0]) - 1  # ID is stored as first value
+        
+        # FIXED: Corrected column indices
+        if col == '#2':  # Edit column (Όνομα is #1, Επεξεργασία is #2)
+            self.start_edit_driver(row_id)
+        elif col == '#3':  # Delete column (Διαγραφή is #3)
+            self.delete_driver(row_id)
 
     def delete_driver(self, row):
         driver = self.drivers[row]['name']
-        if QMessageBox.question(self, "Διαγραφή Οδηγού", f"Θέλετε να διαγράψετε τον οδηγό {driver};") == QMessageBox.Yes:
+        if messagebox.askyesno("Επιβεβαίωση Διαγραφής", f"Θέλετε να διαγράψετε τον οδηγό {driver};"):
             self.drivers.pop(row)
-            save_json('drivers.json', self.drivers)
-            self.refresh_driver_table()
-            self.update_driver_comboboxes()
+            if save_json('drivers.json', self.drivers):
+                # Reindex IDs
+                for idx, driver in enumerate(self.drivers):
+                    driver['id'] = idx + 1
+                save_json('drivers.json', self.drivers)
+                self.refresh_driver_table()
+                self.update_driver_comboboxes()
 
     def refresh_driver_table(self):
-        self.driver_table.setRowCount(len(self.drivers))
-        for i, d in enumerate(self.drivers):
-            self.driver_table.setItem(i, 0, QTableWidgetItem(d['name']))
-            edit_btn = QPushButton("✏️")
-            edit_btn.setMaximumWidth(40)
-            edit_btn.clicked.connect(lambda _, row=i: self.start_edit_driver(row))
-            del_btn = QPushButton("🗑️")
-            del_btn.setMaximumWidth(40)
-            del_btn.clicked.connect(lambda _, row=i: self.delete_driver(row))
-            self.driver_table.setCellWidget(i, 1, edit_btn)
-            self.driver_table.setCellWidget(i, 2, del_btn)
+        self.driver_table.delete(*self.driver_table.get_children())
+        for driver in self.drivers:
+            self.driver_table.insert('', 'end', values=(
+                driver['id'], 
+                driver['name'], 
+                "✏️ Επεξεργασία", 
+                "🗑️ Διαγραφή"
+            ))
 
     def start_edit_driver(self, row):
         self.edit_driver_row = row
-        self.driver_name.setText(self.drivers[row]['name'])
-        self.tabs.setCurrentIndex(0)
-        self.driver_add_btn.setText("💾 Ενημέρωση Οδηγού")
-        self.driver_add_btn.clicked.disconnect()
-        self.driver_add_btn.clicked.connect(self.finish_edit_driver)
+        self.driver_name.delete(0, 'end')
+        self.driver_name.insert(0, self.drivers[row]['name'])
+        self.driver_add_btn.config(text="💾 Ενημέρωση", command=self.finish_edit_driver)
 
     def finish_edit_driver(self):
         row = self.edit_driver_row
-        name = self.driver_name.text().strip()
+        name = self.driver_name.get().strip()
         if not name:
-            QMessageBox.warning(self, "Σφάλμα", "Συμπληρώστε όνομα οδηγού.")
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Συμπληρώστε όνομα οδηγού")
             return
+            
+        # Check for duplicate names
+        if any(i != row and d['name'].lower() == name.lower() for i, d in enumerate(self.drivers)):
+            messagebox.showwarning("Duplicate", "Ο οδηγός υπάρχει ήδη στο σύστημα")
+            return
+            
         self.drivers[row]['name'] = name
-        save_json('drivers.json', self.drivers)
-        self.driver_name.clear()
-        self.refresh_driver_table()
-        self.edit_driver_row = None
-        self.driver_add_btn.setText("➕ Καταχώρηση Οδηγού")
-        self.driver_add_btn.clicked.disconnect()
-        self.driver_add_btn.clicked.connect(self.add_driver)
-        self.update_driver_comboboxes()
+        if save_json('drivers.json', self.drivers):
+            self.driver_name.delete(0, 'end')
+            self.refresh_driver_table()
+            self.edit_driver_row = None
+            self.driver_add_btn.config(text="➕ Καταχώρηση", command=self.add_driver)
+            self.update_driver_comboboxes()
+            messagebox.showinfo("Επιτυχία", "Τα στοιχεία ενημερώθηκαν επιτυχώς")
 
-    # --- Vehicle Tab (with live update in comboboxes) ---
     def vehicle_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout()
-        title = QLabel("Διαχείριση Οχημάτων & ΚΤΕΟ")
-        title.setFont(QFont("Arial", 18, QFont.Bold))
-        layout.addWidget(title)
-        layout.addSpacing(8)
-        form = QHBoxLayout()
-        self.plate_input = QLineEdit()
-        self.plate_input.setPlaceholderText("Πινακίδα")
-        self.kteo_passed = QDateEdit()
-        self.kteo_passed.setCalendarPopup(True)
-        self.kteo_passed.setDate(QDate.currentDate())
-        self.kteo_next = QDateEdit()
-        self.kteo_next.setCalendarPopup(True)
-        self.kteo_next.setDate(QDate.currentDate().addDays(365))
-        self.vehicle_add_btn = QPushButton("➕ Καταχώρηση Οχήματος")
-        self.vehicle_add_btn.clicked.connect(self.add_vehicle)
-        form.addWidget(self.plate_input)
-        form.addWidget(QLabel("ΚΤΕΟ πέρασε"))
-        form.addWidget(self.kteo_passed)
-        form.addWidget(QLabel("Επόμενο ΚΤΕΟ"))
-        form.addWidget(self.kteo_next)
-        form.addWidget(self.vehicle_add_btn)
-        layout.addLayout(form)
-        layout.addSpacing(8)
-        self.vehicle_table = ModernTable(0, 6)
-        self.vehicle_table.setHorizontalHeaderLabels(['Πινακίδα', 'ΚΤΕΟ πέρασε', 'ΚΤΕΟ επόμενο', 'Κατάσταση', 'Επεξεργασία', 'Διαγραφή'])
-        layout.addWidget(self.vehicle_table)
-        w.setLayout(layout)
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Οχήματα")
+        
+        # Title
+        title_frame = ttk.Frame(frame)
+        title_frame.pack(fill='x', pady=(0, 10))
+        tk.Label(title_frame, text="Διαχείριση Οχημάτων & ΚΤΕΟ", font=self.title_font).pack(side='left', padx=12, pady=8)
+        
+        # Form
+        form = ttk.Frame(frame)
+        form.pack(fill='x', padx=12, pady=8)
+        
+        # Plate
+        plate_frame = ttk.Frame(form)
+        plate_frame.pack(side='left', padx=10)
+        tk.Label(plate_frame, text="Πινακίδα:").pack(anchor='w')
+        self.plate_input = ttk.Entry(plate_frame, width=15)
+        self.plate_input.pack()
+        
+        # KΤΕΟ Passed
+        passed_frame = ttk.Frame(form)
+        passed_frame.pack(side='left', padx=10)
+        tk.Label(passed_frame, text="ΚΤΕΟ πέρασε:").pack(anchor='w')
+        self.kteo_passed = ttk.Entry(passed_frame, width=12)
+        self.kteo_passed.pack()
+        self.kteo_passed.insert(0, datetime.date.today().strftime("%Y-%m-%d"))
+        
+        # KΤΕΟ Next
+        next_frame = ttk.Frame(form)
+        next_frame.pack(side='left', padx=10)
+        tk.Label(next_frame, text="Επόμενο ΚΤΕΟ:").pack(anchor='w')
+        self.kteo_next = ttk.Entry(next_frame, width=12)
+        self.kteo_next.pack()
+        next_date = datetime.date.today() + datetime.timedelta(days=365)
+        self.kteo_next.insert(0, next_date.strftime("%Y-%m-%d"))
+        
+        # Buttons
+        btn_frame = ttk.Frame(form)
+        btn_frame.pack(side='right', padx=20)
+        self.vehicle_add_btn = ttk.Button(btn_frame, text="➕ Καταχώρηση", command=self.add_vehicle)
+        self.vehicle_add_btn.pack(pady=5)
+        
+        # Table
+        self.vehicle_table = self.create_scrollable_table(frame, 
+            ("id", "Πινακίδα", "ΚΤΕΟ πέρασε", "ΚΤΕΟ επόμενο", "Κατάσταση", "Επεξεργασία", "Διαγραφή"))
+        
+        self.vehicle_table.heading("id", text="ID", anchor='center')
+        self.vehicle_table.heading("Πινακίδα", text="Πινακίδα", anchor='w')
+        self.vehicle_table.heading("ΚΤΕΟ πέρασε", text="ΚΤΕΟ πέρασε", anchor='center')
+        self.vehicle_table.heading("ΚΤΕΟ επόμενο", text="ΚΤΕΟ επόμενο", anchor='center')
+        self.vehicle_table.heading("Κατάσταση", text="Κατάσταση", anchor='center')
+        self.vehicle_table.heading("Επεξεργασία", text="Επεξεργασία", anchor='center')
+        self.vehicle_table.heading("Διαγραφή", text="Διαγραφή", anchor='center')
+        
+        # Set column widths
+        self.vehicle_table.column("id", width=50, anchor='center', stretch=False)
+        self.vehicle_table.column("Πινακίδα", width=180, anchor='w')
+        self.vehicle_table.column("ΚΤΕΟ πέρασε", width=140, anchor='center')
+        self.vehicle_table.column("ΚΤΕΟ επόμενο", width=140, anchor='center')
+        self.vehicle_table.column("Κατάσταση", width=140, anchor='center')
+        self.vehicle_table.column("Επεξεργασία", width=140, anchor='center')
+        self.vehicle_table.column("Διαγραφή", width=140, anchor='center')
+        self.vehicle_table["displaycolumns"] = ("Πινακίδα", "ΚΤΕΟ πέρασε", "ΚΤΕΟ επόμενο", "Κατάσταση", "Επεξεργασία", "Διαγραφή")
+        
+        # Configure status colors
+        self.vehicle_table.tag_configure("danger", background="#ffcccc")
+        self.vehicle_table.tag_configure("warning", background="#fff0cc")
+        self.vehicle_table.tag_configure("info", background="#e6f3ff")
+        self.vehicle_table.tag_configure("success", background="#ccffcc")
+        self.vehicle_table.tag_configure("secondary", background="#f0f0f0")
+        
+        self.vehicle_table.bind('<Button-1>', self.vehicle_table_action)
         self.refresh_vehicle_table()
-        return w
 
     def add_vehicle(self):
-        plate = self.plate_input.text().strip()
-        passed = self.kteo_passed.date().toString("yyyy-MM-dd")
-        next_ = self.kteo_next.date().toString("yyyy-MM-dd")
+        plate = self.plate_input.get().strip().upper()
+        passed = self.kteo_passed.get().strip()
+        next_ = self.kteo_next.get().strip()
+        
+        # Validation
         if not plate:
-            QMessageBox.warning(self, "Σφάλμα", "Συμπληρώστε πινακίδα.")
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Συμπληρώστε πινακίδα οχήματος")
             return
-        self.vehicles.append({'plate': plate, 'kteo_passed': passed, 'kteo_next': next_})
-        save_json('vehicles.json', self.vehicles)
-        self.plate_input.clear()
-        self.refresh_vehicle_table()
-        self.update_vehicle_comboboxes()
+            
+        if not validate_date(passed):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία ΚΤΕΟ (YYYY-MM-DD)")
+            return
+            
+        if not validate_date(next_):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία επόμενου ΚΤΕΟ (YYYY-MM-DD)")
+            return
+            
+        # Check for duplicate plates
+        if any(v['plate'].upper() == plate for v in self.vehicles):
+            messagebox.showwarning("Duplicate", "Η πινακίδα υπάρχει ήδη στο σύστημα")
+            return
+            
+        # Generate new ID
+        new_id = max([v['id'] for v in self.vehicles]) + 1 if self.vehicles else 1
+            
+        self.vehicles.append({
+            'id': new_id,
+            'plate': plate,
+            'kteo_passed': passed,
+            'kteo_next': next_
+        })
+        
+        if save_json('vehicles.json', self.vehicles):
+            self.plate_input.delete(0, 'end')
+            self.refresh_vehicle_table()
+            self.update_vehicle_comboboxes()
+            messagebox.showinfo("Επιτυχία", "Το όχημα καταχωρήθηκε επιτυχώς")
+
+    def vehicle_table_action(self, event):
+        item = self.vehicle_table.identify_row(event.y)
+        if not item: return
+        
+        col = self.vehicle_table.identify_column(event.x)
+        values = self.vehicle_table.item(item, 'values')
+        row_id = int(values[0]) - 1  # ID is stored as first value
+        
+        # FIXED: Corrected column indices
+        if col == '#5':  # Edit column (Επεξεργασία is #5)
+            self.start_edit_vehicle(row_id)
+        elif col == '#6':  # Delete column (Διαγραφή is #6)
+            self.delete_vehicle(row_id)
 
     def delete_vehicle(self, row):
         plate = self.vehicles[row]['plate']
-        if QMessageBox.question(self, "Διαγραφή Οχήματος", f"Θέλετε να διαγράψετε το όχημα {plate};") == QMessageBox.Yes:
+        if messagebox.askyesno("Επιβεβαίωση Διαγραφής", f"Θέλετε να διαγράψετε το όχημα {plate};"):
             self.vehicles.pop(row)
-            save_json('vehicles.json', self.vehicles)
-            self.refresh_vehicle_table()
-            self.update_vehicle_comboboxes()
+            if save_json('vehicles.json', self.vehicles):
+                # Reindex IDs
+                for idx, vehicle in enumerate(self.vehicles):
+                    vehicle['id'] = idx + 1
+                save_json('vehicles.json', self.vehicles)
+                self.refresh_vehicle_table()
+                self.update_vehicle_comboboxes()
 
     def refresh_vehicle_table(self):
-        self.vehicle_table.setRowCount(len(self.vehicles))
-        for i, v in enumerate(self.vehicles):
-            self.vehicle_table.setItem(i, 0, QTableWidgetItem(v['plate']))
-            self.vehicle_table.setItem(i, 1, QTableWidgetItem(v['kteo_passed']))
-            self.vehicle_table.setItem(i, 2, QTableWidgetItem(v['kteo_next']))
-            status = self.get_kteo_status(v['kteo_next'])
-            item = QTableWidgetItem(status)
-            if status == "DANGER":
-                item.setBackground(QColor("#fa5252"))
-            elif status == "WARNING":
-                item.setBackground(QColor("#ffd43b"))
-            self.vehicle_table.setItem(i, 3, item)
-            edit_btn = QPushButton("✏️")
-            edit_btn.setMaximumWidth(40)
-            edit_btn.clicked.connect(lambda _, row=i: self.start_edit_vehicle(row))
-            del_btn = QPushButton("🗑️")
-            del_btn.setMaximumWidth(40)
-            del_btn.clicked.connect(lambda _, row=i: self.delete_vehicle(row))
-            self.vehicle_table.setCellWidget(i, 4, edit_btn)
-            self.vehicle_table.setCellWidget(i, 5, del_btn)
+        self.vehicle_table.delete(*self.vehicle_table.get_children())
+        for vehicle in self.vehicles:
+            status = self.get_kteo_status(vehicle['kteo_next'])
+            status_text, style = self.get_status_display(status)
+            
+            self.vehicle_table.insert('', 'end', values=(
+                vehicle['id'],
+                vehicle['plate'],
+                vehicle['kteo_passed'],
+                vehicle['kteo_next'],
+                status_text,
+                "✏️ Επεξεργασία",
+                "🗑️ Διαγραφή"
+            ), tags=(style,))
+
+    def get_kteo_status(self, date_next):
+        today = datetime.date.today()
+        try:
+            kteo_next = datetime.datetime.strptime(date_next, "%Y-%m-%d").date()
+            delta = (kteo_next - today).days
+            
+            if delta < 0:
+                return "expired"
+            elif delta < 15:
+                return "warning"
+            elif delta < 30:
+                return "notice"
+            else:
+                return "ok"
+        except Exception:
+            return "error"
+
+    def get_status_display(self, status):
+        status_map = {
+            "expired": ("ΛΗΓΜΕΝΟ", "danger"),
+            "warning": ("ΠΡΟΣΕΧΩΣ", "warning"),
+            "notice": ("ΚΟΝΤΑ", "info"),
+            "ok": ("ΕΝΤΑΞΕΙ", "success"),
+            "error": ("ΛΑΘΟΣ", "danger")
+        }
+        return status_map.get(status, ("ΑΓΝΩΣΤΟ", "secondary"))
 
     def start_edit_vehicle(self, row):
         self.edit_vehicle_row = row
         v = self.vehicles[row]
-        self.plate_input.setText(v['plate'])
-        self.kteo_passed.setDate(QDate.fromString(v['kteo_passed'], "yyyy-MM-dd"))
-        self.kteo_next.setDate(QDate.fromString(v['kteo_next'], "yyyy-MM-dd"))
-        self.tabs.setCurrentIndex(1)
-        self.vehicle_add_btn.setText("💾 Ενημέρωση Οχήματος")
-        self.vehicle_add_btn.clicked.disconnect()
-        self.vehicle_add_btn.clicked.connect(self.finish_edit_vehicle)
+        self.plate_input.delete(0, 'end')
+        self.plate_input.insert(0, v['plate'])
+        self.kteo_passed.delete(0, 'end')
+        self.kteo_passed.insert(0, v['kteo_passed'])
+        self.kteo_next.delete(0, 'end')
+        self.kteo_next.insert(0, v['kteo_next'])
+        self.vehicle_add_btn.config(text="💾 Ενημέρωση", command=self.finish_edit_vehicle)
 
     def finish_edit_vehicle(self):
         row = self.edit_vehicle_row
-        plate = self.plate_input.text().strip()
-        passed = self.kteo_passed.date().toString("yyyy-MM-dd")
-        next_ = self.kteo_next.date().toString("yyyy-MM-dd")
+        plate = self.plate_input.get().strip().upper()
+        passed = self.kteo_passed.get().strip()
+        next_ = self.kteo_next.get().strip()
+        
+        # Validation
         if not plate:
-            QMessageBox.warning(self, "Σφάλμα", "Συμπληρώστε πινακίδα.")
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Συμπληρώστε πινακίδα οχήματος")
             return
-        self.vehicles[row] = {'plate': plate, 'kteo_passed': passed, 'kteo_next': next_}
-        save_json('vehicles.json', self.vehicles)
-        self.plate_input.clear()
-        self.refresh_vehicle_table()
-        self.edit_vehicle_row = None
-        self.vehicle_add_btn.setText("➕ Καταχώρηση Οχήματος")
-        self.vehicle_add_btn.clicked.disconnect()
-        self.vehicle_add_btn.clicked.connect(self.add_vehicle)
-        self.update_vehicle_comboboxes()
-
-    def get_kteo_status(self, date_next):
-        today = datetime.date.today()
-        kteo_next = datetime.datetime.strptime(date_next, "%Y-%m-%d").date()
-        delta = (kteo_next - today).days
-        if delta < 0:
-            return "DANGER"
-        elif delta < 15:
-            return "WARNING"
-        else:
-            return "OK"
+            
+        if not validate_date(passed):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία ΚΤΕΟ (YYYY-MM-DD)")
+            return
+            
+        if not validate_date(next_):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία επόμενου ΚΤΕΟ (YYYY-MM-DD)")
+            return
+            
+        # Check for duplicate plates
+        if any(i != row and v['plate'].upper() == plate for i, v in enumerate(self.vehicles)):
+            messagebox.showwarning("Duplicate", "Η πινακίδα υπάρχει ήδη στο σύστημα")
+            return
+            
+        self.vehicles[row]['plate'] = plate
+        self.vehicles[row]['kteo_passed'] = passed
+        self.vehicles[row]['kteo_next'] = next_
+        
+        if save_json('vehicles.json', self.vehicles):
+            self.plate_input.delete(0, 'end')
+            self.refresh_vehicle_table()
+            self.edit_vehicle_row = None
+            self.vehicle_add_btn.config(text="➕ Καταχώρηση", command=self.add_vehicle)
+            self.update_vehicle_comboboxes()
+            messagebox.showinfo("Επιτυχία", "Τα στοιχεία ενημερώθηκαν επιτυχώς")
 
     def check_kteo_dates(self):
         alerts = []
         for v in self.vehicles:
             status = self.get_kteo_status(v['kteo_next'])
-            if status == "DANGER":
+            if status == "expired":
                 alerts.append(f"🚨 Όχημα {v['plate']} έχει ληγμένο ΚΤΕΟ!")
-            elif status == "WARNING":
-                alerts.append(f"⚠️ Όχημα {v['plate']} χρειάζεται ΚΤΕΟ σύντομα.")
+            elif status == "warning":
+                alerts.append(f"⚠️ Όχημα {v['plate']} χρειάζεται ΚΤΕΟ εντός 15 ημερών!")
+        
         if alerts:
-            QMessageBox.warning(self, "ΚΤΕΟ Alerts", "\n".join(alerts))
+            messagebox.showwarning("Ειδοποίηση ΚΤΕΟ", "\n".join(alerts))
+        
         self.refresh_vehicle_table()
+        self.after(60 * 60 * 1000, self.check_kteo_dates)  # Check every hour
 
-    # --- Trip Tab (live comboboxes, signature edit) ---
     def trip_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout()
-        title = QLabel("Καταγραφή Διαδρομών")
-        title.setFont(QFont("Arial", 18, QFont.Bold))
-        layout.addWidget(title)
-        layout.addSpacing(8)
-        form = QHBoxLayout()
-        self.trip_driver = QComboBox()
-        self.trip_driver.addItems([d['name'] for d in self.drivers])
-        self.trip_vehicle = QComboBox()
-        self.trip_vehicle.addItems([v['plate'] for v in self.vehicles])
-        self.trip_depart_date = QDateEdit()
-        self.trip_depart_date.setCalendarPopup(True)
-        self.trip_depart_date.setDate(QDate.currentDate())
-        self.trip_depart_time = QTimeEdit()
-        self.trip_depart_time.setTime(datetime.datetime.now().time())
-        self.trip_arrive_date = QDateEdit()
-        self.trip_arrive_date.setCalendarPopup(True)
-        self.trip_arrive_date.setDate(QDate.currentDate())
-        self.trip_arrive_time = QTimeEdit()
-        self.trip_arrive_time.setTime(datetime.datetime.now().time())
-        form.addWidget(QLabel("Οδηγός:"))
-        form.addWidget(self.trip_driver)
-        form.addWidget(QLabel("Όχημα:"))
-        form.addWidget(self.trip_vehicle)
-        layout.addLayout(form)
-        time_form = QHBoxLayout()
-        time_form.addWidget(QLabel("Αναχώρηση:"))
-        time_form.addWidget(self.trip_depart_date)
-        time_form.addWidget(self.trip_depart_time)
-        time_form.addSpacing(15)
-        time_form.addWidget(QLabel("Άφιξη:"))
-        time_form.addWidget(self.trip_arrive_date)
-        time_form.addWidget(self.trip_arrive_time)
-        layout.addLayout(time_form)
-        layout.addSpacing(8)
-        self.trip_details = QTextEdit()
-        self.trip_details.setPlaceholderText("Λεπτομέρειες διαδρομής...")
-        layout.addWidget(self.trip_details)
-        sig_layout = QHBoxLayout()
-        self.signature_pad = SignaturePad()
-        sig_layout.addWidget(QLabel("Υπογραφή:"))
-        sig_layout.addWidget(self.signature_pad)
-        self.sign_btn = QPushButton("🧹 Καθαρισμός Υπογραφής")
-        self.sign_btn.clicked.connect(self.signature_pad.clear)
-        sig_layout.addWidget(self.sign_btn)
-        layout.addLayout(sig_layout)
-        self.trip_add_btn = QPushButton("➕ Καταχώρηση Διαδρομής")
-        self.trip_add_btn.clicked.connect(self.add_trip)
-        layout.addWidget(self.trip_add_btn)
-        self.trip_table = ModernTable(0, 8)
-        self.trip_table.setHorizontalHeaderLabels(['Οδηγός', 'Όχημα', 'Αναχώρηση', 'Άφιξη', 'Λεπτομέρειες', 'Υπογραφή', 'Επεξεργασία', 'Διαγραφή'])
-        layout.addWidget(self.trip_table)
-        export_btn = QPushButton("⤴️ Εξαγωγή Διαδρομής σε PDF")
-        export_btn.clicked.connect(self.export_trip_pdf)
-        layout.addWidget(export_btn)
-        w.setLayout(layout)
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Διαδρομές")
+        
+        # Title
+        title_frame = ttk.Frame(frame)
+        title_frame.pack(fill='x', pady=(0, 10))
+        tk.Label(title_frame, text="Καταγραφή Διαδρομών", font=self.title_font).pack(side='left', padx=12, pady=8)
+        
+        # Form
+        form = ttk.LabelFrame(frame, text="Στοιχεία Διαδρομής")
+        form.pack(fill='x', padx=12, pady=8)
+        
+        # Driver and Vehicle
+        row1 = ttk.Frame(form)
+        row1.pack(fill='x', padx=10, pady=5)
+        
+        tk.Label(row1, text="Οδηγός:", width=12).pack(side='left')
+        self.trip_driver = ttk.Combobox(row1, values=[d['name'] for d in self.drivers], width=25)
+        self.trip_driver.pack(side='left', padx=8)
+        
+        tk.Label(row1, text="Όχημα:", width=12).pack(side='left')
+        self.trip_vehicle = ttk.Combobox(row1, values=[v['plate'] for v in self.vehicles], width=12)
+        self.trip_vehicle.pack(side='left', padx=8)
+        
+        # Departure
+        row2 = ttk.Frame(form)
+        row2.pack(fill='x', padx=10, pady=5)
+        
+        tk.Label(row2, text="Αναχώρηση:", width=12).pack(side='left')
+        
+        tk.Label(row2, text="Ημ/νία:").pack(side='left')
+        self.trip_depart_date = ttk.Entry(row2, width=12)
+        self.trip_depart_date.pack(side='left', padx=2)
+        self.trip_depart_date.insert(0, datetime.date.today().strftime("%Y-%m-%d"))
+        
+        tk.Label(row2, text="Ώρα:").pack(side='left', padx=(10, 2))
+        self.trip_depart_time = ttk.Entry(row2, width=7)
+        self.trip_depart_time.pack(side='left')
+        self.trip_depart_time.insert(0, datetime.datetime.now().strftime("%H:%M"))
+        
+        # Arrival
+        row3 = ttk.Frame(form)
+        row3.pack(fill='x', padx=10, pady=5)
+        
+        tk.Label(row3, text="Άφιξη:", width=12).pack(side='left')
+        
+        tk.Label(row3, text="Ημ/νία:").pack(side='left')
+        self.trip_arrive_date = ttk.Entry(row3, width=12)
+        self.trip_arrive_date.pack(side='left', padx=2)
+        self.trip_arrive_date.insert(0, datetime.date.today().strftime("%Y-%m-%d"))
+        
+        tk.Label(row3, text="Ώρα:").pack(side='left', padx=(10, 2))
+        self.trip_arrive_time = ttk.Entry(row3, width=7)
+        self.trip_arrive_time.pack(side='left')
+        self.trip_arrive_time.insert(0, datetime.datetime.now().strftime("%H:%M"))
+        
+        # Details
+        details_frame = ttk.LabelFrame(frame, text="Λεπτομέρειες Διαδρομής")
+        details_frame.pack(fill='x', padx=12, pady=8)
+        
+        self.trip_details = ScrolledText(details_frame, height=4, font=self.font)
+        self.trip_details.pack(fill='x', padx=10, pady=5)
+        
+        # Signature
+        sig_frame = ttk.LabelFrame(frame, text="Υπογραφή Οδηγού")
+        sig_frame.pack(fill='x', padx=12, pady=8)
+        
+        sig_row = ttk.Frame(sig_frame)
+        sig_row.pack(fill='x', padx=10, pady=5)
+        
+        self.signature_pad = SignaturePad(sig_row, width=400, height=180)
+        self.signature_pad.pack(side='left', padx=8)
+        
+        btn_frame = ttk.Frame(sig_row)
+        btn_frame.pack(side='left', fill='y', padx=8)
+        
+        self.sign_btn = ttk.Button(btn_frame, text="🧹 Καθαρισμός", command=self.signature_pad.clear)
+        self.sign_btn.pack(pady=5, fill='x')
+        
+        self.trip_add_btn = ttk.Button(btn_frame, text="➕ Καταχώρηση", command=self.add_trip)
+        self.trip_add_btn.pack(pady=5, fill='x')
+        
+        # Table
+        table_frame = ttk.LabelFrame(frame, text="Ιστορικό Διαδρομών")
+        table_frame.pack(fill='both', expand=True, padx=12, pady=8)
+        
+        self.trip_table = self.create_scrollable_table(table_frame, 
+            ("id", "Οδηγός", "Όχημα", "Αναχώρηση", "Άφιξη", "Επεξεργασία", "Διαγραφή"))
+        
+        self.trip_table.heading("id", text="ID", anchor='center')
+        self.trip_table.heading("Οδηγός", text="Οδηγός", anchor='w')
+        self.trip_table.heading("Όχημα", text="Όχημα", anchor='w')
+        self.trip_table.heading("Αναχώρηση", text="Αναχώρηση", anchor='center')
+        self.trip_table.heading("Άφιξη", text="Άφιξη", anchor='center')
+        self.trip_table.heading("Επεξεργασία", text="Επεξεργασία", anchor='center')
+        self.trip_table.heading("Διαγραφή", text="Διαγραφή", anchor='center')
+        
+        # Set column widths
+        self.trip_table.column("id", width=50, anchor='center', stretch=False)
+        self.trip_table.column("Οδηγός", width=200, anchor='w')
+        self.trip_table.column("Όχημα", width=120, anchor='w')
+        self.trip_table.column("Αναχώρηση", width=180, anchor='center')
+        self.trip_table.column("Άφιξη", width=180, anchor='center')
+        self.trip_table.column("Επεξεργασία", width=140, anchor='center')
+        self.trip_table.column("Διαγραφή", width=140, anchor='center')
+        self.trip_table["displaycolumns"] = ("Οδηγός", "Όχημα", "Αναχώρηση", "Άφιξη", "Επεξεργασία", "Διαγραφή")
+        
+        self.trip_table.bind('<Button-1>', self.trip_table_action)
+        
+        # Export button
+        export_frame = ttk.Frame(frame)
+        export_frame.pack(pady=8)
+        export_btn = ttk.Button(export_frame, text="⤴️ Εξαγωγή σε PDF", command=self.export_trip_pdf)
+        export_btn.pack()
+        
         self.refresh_trip_table()
-        return w
 
     def add_trip(self):
+        driver = self.trip_driver.get().strip()
+        vehicle = self.trip_vehicle.get().strip()
+        depart_date = self.trip_depart_date.get().strip()
+        depart_time = self.trip_depart_time.get().strip()
+        arrive_date = self.trip_arrive_date.get().strip()
+        arrive_time = self.trip_arrive_time.get().strip()
+        details = self.trip_details.get('1.0', 'end-1c').strip()
+        
+        # Validation
+        if not driver:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Επιλέξτε οδηγό")
+            return
+            
+        if not vehicle:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Επιλέξτε όχημα")
+            return
+            
+        if not validate_date(depart_date):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία αναχώρησης (YYYY-MM-DD)")
+            return
+            
+        if not validate_time(depart_time):
+            messagebox.showwarning("Μη έγκυρη ώρα", "Μη έγκυρη ώρα αναχώρησης (HH:MM)")
+            return
+            
+        if not validate_date(arrive_date):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία άφιξης (YYYY-MM-DD)")
+            return
+            
+        if not validate_time(arrive_time):
+            messagebox.showwarning("Μη έγκυρη ώρα", "Μη έγκυρη ώρα άφιξης (HH:MM)")
+            return
+            
+        # Create trip record
+        # Generate new ID
+        new_id = max([t['id'] for t in self.trips]) + 1 if self.trips else 1
+            
         trip = {
-            'driver': self.trip_driver.currentText(),
-            'vehicle': self.trip_vehicle.currentText(),
-            'depart': self.trip_depart_date.date().toString("yyyy-MM-dd") + " " + self.trip_depart_time.time().toString("HH:mm"),
-            'arrive': self.trip_arrive_date.date().toString("yyyy-MM-dd") + " " + self.trip_arrive_time.time().toString("HH:mm"),
-            'details': self.trip_details.toPlainText(),
-            'signature': f"signature_{len(self.trips)}.png"
+            'id': new_id,
+            'driver': driver,
+            'vehicle': vehicle,
+            'depart': f"{depart_date} {depart_time}",
+            'arrive': f"{arrive_date} {arrive_time}",
+            'details': details,
+            'signature': f"signature_{new_id}.png"
         }
-        self.signature_pad.save(os.path.join(DATA_DIR, trip['signature']))
+        
+        # Save signature
+        sig_path = os.path.join(DATA_DIR, trip['signature'])
+        if not self.signature_pad.save(sig_path):
+            messagebox.showwarning("Σφάλμα Αρχείου", "Σφάλμα αποθήκευσης υπογραφής")
+            return
+            
         self.trips.append(trip)
-        save_json('trips.json', self.trips)
-        self.trip_details.clear()
-        self.signature_pad.clear()
-        self.refresh_trip_table()
+        if save_json('trips.json', self.trips):
+            self.trip_details.delete('1.0', 'end')
+            self.signature_pad.clear()
+            self.refresh_trip_table()
+            messagebox.showinfo("Επιτυχία", "Η διαδρομή καταχωρήθηκε επιτυχώς")
+
+    def trip_table_action(self, event):
+        item = self.trip_table.identify_row(event.y)
+        if not item: return
+        
+        col = self.trip_table.identify_column(event.x)
+        values = self.trip_table.item(item, 'values')
+        row_id = int(values[0]) - 1  # ID is stored as first value
+        
+        # FIXED: Corrected column indices
+        if col == '#5':  # Edit column (Επεξεργασία is #5)
+            self.start_edit_trip(row_id)
+        elif col == '#6':  # Delete column (Διαγραφή is #6)
+            self.delete_trip(row_id)
 
     def delete_trip(self, row):
-        if QMessageBox.question(self, "Διαγραφή Διαδρομής", f"Θέλετε να διαγράψετε τη διαδρομή;") == QMessageBox.Yes:
+        if messagebox.askyesno("Επιβεβαίωση Διαγραφής", "Θέλετε να διαγράψετε αυτή τη διαδρομή;"):
+            # Delete signature file
+            sig_file = self.trips[row]['signature']
+            sig_path = os.path.join(DATA_DIR, sig_file)
+            if os.path.exists(sig_path):
+                try:
+                    os.remove(sig_path)
+                except:
+                    pass
+                    
             self.trips.pop(row)
-            save_json('trips.json', self.trips)
-            self.refresh_trip_table()
+            if save_json('trips.json', self.trips):
+                # Reindex IDs
+                for idx, trip in enumerate(self.trips):
+                    trip['id'] = idx + 1
+                save_json('trips.json', self.trips)
+                self.refresh_trip_table()
 
     def refresh_trip_table(self):
-        self.trip_table.setRowCount(len(self.trips))
-        for i, t in enumerate(self.trips):
-            self.trip_table.setItem(i, 0, QTableWidgetItem(t['driver']))
-            self.trip_table.setItem(i, 1, QTableWidgetItem(t['vehicle']))
-            self.trip_table.setItem(i, 2, QTableWidgetItem(t['depart']))
-            self.trip_table.setItem(i, 3, QTableWidgetItem(t['arrive']))
-            self.trip_table.setItem(i, 4, QTableWidgetItem(t['details']))
-            self.trip_table.setItem(i, 5, QTableWidgetItem(t['signature']))
-            edit_btn = QPushButton("✏️")
-            edit_btn.setMaximumWidth(40)
-            edit_btn.clicked.connect(lambda _, row=i: self.start_edit_trip(row))
-            del_btn = QPushButton("🗑️")
-            del_btn.setMaximumWidth(40)
-            del_btn.clicked.connect(lambda _, row=i: self.delete_trip(row))
-            self.trip_table.setCellWidget(i, 6, edit_btn)
-            self.trip_table.setCellWidget(i, 7, del_btn)
+        self.trip_table.delete(*self.trip_table.get_children())
+        for trip in self.trips:
+            self.trip_table.insert('', 'end', values=(
+                trip['id'],
+                trip['driver'],
+                trip['vehicle'],
+                trip['depart'],
+                trip['arrive'],
+                "✏️ Επεξεργασία",
+                "🗑️ Διαγραφή"
+            ))
 
     def start_edit_trip(self, row):
         self.edit_trip_row = row
         t = self.trips[row]
-        self.trip_driver.setCurrentText(t['driver'])
-        self.trip_vehicle.setCurrentText(t['vehicle'])
+        self.trip_driver.set(t['driver'])
+        self.trip_vehicle.set(t['vehicle'])
+        
         d_date, d_time = t['depart'].split()
         a_date, a_time = t['arrive'].split()
-        self.trip_depart_date.setDate(QDate.fromString(d_date, "yyyy-MM-dd"))
-        self.trip_depart_time.setTime(datetime.datetime.strptime(d_time, "%H:%M").time())
-        self.trip_arrive_date.setDate(QDate.fromString(a_date, "yyyy-MM-dd"))
-        self.trip_arrive_time.setTime(datetime.datetime.strptime(a_time, "%H:%M").time())
-        self.trip_details.setText(t['details'])
+        
+        self.trip_depart_date.delete(0, 'end')
+        self.trip_depart_date.insert(0, d_date)
+        self.trip_depart_time.delete(0, 'end')
+        self.trip_depart_time.insert(0, d_time)
+        
+        self.trip_arrive_date.delete(0, 'end')
+        self.trip_arrive_date.insert(0, a_date)
+        self.trip_arrive_time.delete(0, 'end')
+        self.trip_arrive_time.insert(0, a_time)
+        
+        self.trip_details.delete('1.0', 'end')
+        self.trip_details.insert('1.0', t['details'])
+        
         sig_path = os.path.join(DATA_DIR, t['signature'])
-        if os.path.exists(sig_path):
-            self.signature_pad.pixmap.load(sig_path)
-            self.signature_pad.update()
-        self.temp_signature_file = t['signature']
-        self.trip_add_btn.setText("💾 Ενημέρωση Διαδρομής")
-        self.trip_add_btn.clicked.disconnect()
-        self.trip_add_btn.clicked.connect(self.finish_edit_trip)
-        self.sign_btn.setText("✍️ Υπογραφή (Ενημέρωση)")
-        self.sign_btn.clicked.disconnect()
-        self.sign_btn.clicked.connect(self.open_sign_dialog)
-
-    def open_sign_dialog(self):
-        t = self.trips[self.edit_trip_row] if self.edit_trip_row is not None else None
-        initial = os.path.join(DATA_DIR, t['signature']) if t else None
-        sig_dialog = SignatureDialog(self, initial_signature=initial)
-        sig_dialog.setWindowModality(Qt.ApplicationModal)
-        sig_dialog.show()
-        sig_dialog.save_btn.clicked.connect(lambda: self.save_signature(sig_dialog))
-        sig_dialog.cancel_btn.clicked.connect(sig_dialog.reject)
-
-    def save_signature(self, sig_dialog):
-        if self.edit_trip_row is not None:
-            fname = self.trips[self.edit_trip_row]['signature']
-        else:
-            fname = f"signature_{len(self.trips)}.png"
-        sig_dialog.sig_pad.save(os.path.join(DATA_DIR, fname))
-        self.signature_pad.pixmap.load(os.path.join(DATA_DIR, fname))
-        self.signature_pad.update()
-        sig_dialog.accept()
+        self.signature_pad.load(sig_path)
+        
+        self.trip_add_btn.config(text="💾 Ενημέρωση", command=self.finish_edit_trip)
 
     def finish_edit_trip(self):
         row = self.edit_trip_row
-        trip = {
-            'driver': self.trip_driver.currentText(),
-            'vehicle': self.trip_vehicle.currentText(),
-            'depart': self.trip_depart_date.date().toString("yyyy-MM-dd") + " " + self.trip_depart_time.time().toString("HH:mm"),
-            'arrive': self.trip_arrive_date.date().toString("yyyy-MM-dd") + " " + self.trip_arrive_time.time().toString("HH:mm"),
-            'details': self.trip_details.toPlainText(),
-            'signature': self.trips[row]['signature']
-        }
-        self.signature_pad.save(os.path.join(DATA_DIR, trip['signature']))
-        self.trips[row] = trip
-        save_json('trips.json', self.trips)
-        self.trip_details.clear()
-        self.signature_pad.clear()
-        self.refresh_trip_table()
-        self.edit_trip_row = None
-        self.trip_add_btn.setText("➕ Καταχώρηση Διαδρομής")
-        self.trip_add_btn.clicked.disconnect()
-        self.trip_add_btn.clicked.connect(self.add_trip)
-        self.sign_btn.setText("🧹 Καθαρισμός Υπογραφής")
-        self.sign_btn.clicked.disconnect()
-        self.sign_btn.clicked.connect(self.signature_pad.clear)
+        driver = self.trip_driver.get().strip()
+        vehicle = self.trip_vehicle.get().strip()
+        depart_date = self.trip_depart_date.get().strip()
+        depart_time = self.trip_depart_time.get().strip()
+        arrive_date = self.trip_arrive_date.get().strip()
+        arrive_time = self.trip_arrive_time.get().strip()
+        details = self.trip_details.get('1.0', 'end-1c').strip()
+        
+        # Validation
+        if not driver:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Επιλέξτε οδηγό")
+            return
+            
+        if not vehicle:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Επιλέξτε όχημα")
+            return
+            
+        if not validate_date(depart_date):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία αναχώρησης (YYYY-MM-DD)")
+            return
+            
+        if not validate_time(depart_time):
+            messagebox.showwarning("Μη έγκυρη ώρα", "Μη έγκυρη ώρα αναχώρησης (HH:MM)")
+            return
+            
+        if not validate_date(arrive_date):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία άφιξης (YYYY-MM-DD)")
+            return
+            
+        if not validate_time(arrive_time):
+            messagebox.showwarning("Μη έγκυρη ώρα", "Μη έγκυρη ώρα άφιξης (HH:MM)")
+            return
+            
+        # Update trip record
+        self.trips[row]['driver'] = driver
+        self.trips[row]['vehicle'] = vehicle
+        self.trips[row]['depart'] = f"{depart_date} {depart_time}"
+        self.trips[row]['arrive'] = f"{arrive_date} {arrive_time}"
+        self.trips[row]['details'] = details
+        
+        # Save signature
+        sig_path = os.path.join(DATA_DIR, self.trips[row]['signature'])
+        if not self.signature_pad.save(sig_path):
+            messagebox.showwarning("Σφάλμα Αρχείου", "Σφάλμα αποθήκευσης υπογραφής")
+            return
+            
+        if save_json('trips.json', self.trips):
+            self.trip_details.delete('1.0', 'end')
+            self.signature_pad.clear()
+            self.refresh_trip_table()
+            self.edit_trip_row = None
+            self.trip_add_btn.config(text="➕ Καταχώρηση", command=self.add_trip)
+            messagebox.showinfo("Επιτυχία", "Η διαδρομή ενημερώθηκε επιτυχώς")
 
     def export_trip_pdf(self):
-        idx = self.trip_table.currentRow()
-        if idx < 0:
-            QMessageBox.warning(self, "Σφάλμα", "Επιλέξτε διαδρομή για εξαγωγή.")
+        selected = self.trip_table.selection()
+        if not selected:
+            messagebox.showwarning("Δεν έχει επιλεγεί εγγραφή", "Επιλέξτε μια διαδρομή για εξαγωγή")
             return
+            
+        idx = self.trip_table.index(selected[0])
         trip = self.trips[idx]
-        fname, _ = QFileDialog.getSaveFileName(self, "Αποθήκευση PDF", f"{trip['driver']}_{trip['vehicle']}.pdf", "PDF Files (*.pdf)")
-        if fname:
-            c = canvas.Canvas(fname)
-            c.setFont("Helvetica", 15)
-            c.drawString(100, 800, f"Οδηγός: {trip['driver']}")
-            c.drawString(100, 780, f"Όχημα: {trip['vehicle']}")
-            c.drawString(100, 760, f"Αναχώρηση: {trip['depart']}")
-            c.drawString(100, 740, f"Άφιξη: {trip['arrive']}")
-            c.setFont("Helvetica", 12)
-            c.drawString(100, 720, f"Λεπτομέρειες: {trip['details']}")
+        
+        fname = filedialog.asksaveasfilename(
+            defaultextension=".pdf", 
+            filetypes=[("PDF Files", "*.pdf")],
+            title="Αποθήκευση PDF"
+        )
+        
+        if not fname:
+            return
+            
+        try:
+            # Create PDF document
+            doc = SimpleDocTemplate(fname, pagesize=letter)
+            styles = getSampleStyleSheet()
+            elements = []
+            
+            # Title
+            title_style = styles['Heading1']
+            title_style.alignment = 1  # Center alignment
+            title = Paragraph("<b>ΚΑΤΑΓΓΕΛΙΑ ΔΙΑΔΡΟΜΗΣ</b>", title_style)
+            elements.append(title)
+            elements.append(Spacer(1, 24))
+            
+            # Driver and Vehicle
+            driver_text = f"<b>Οδηγός:</b> {trip['driver']}"
+            vehicle_text = f"<b>Όχημα:</b> {trip['vehicle']}"
+            
+            info_style = styles['BodyText']
+            driver_para = Paragraph(driver_text, info_style)
+            vehicle_para = Paragraph(vehicle_text, info_style)
+            
+            elements.append(driver_para)
+            elements.append(Spacer(1, 12))
+            elements.append(vehicle_para)
+            elements.append(Spacer(1, 24))
+            
+            # Departure and Arrival
+            depart_text = f"<b>Αναχώρηση:</b> {trip['depart']}"
+            arrive_text = f"<b>Άφιξη:</b> {trip['arrive']}"
+            
+            depart_para = Paragraph(depart_text, info_style)
+            arrive_para = Paragraph(arrive_text, info_style)
+            
+            elements.append(depart_para)
+            elements.append(Spacer(1, 12))
+            elements.append(arrive_para)
+            elements.append(Spacer(1, 24))
+            
+            # Details
+            details_title = Paragraph("<b>Λεπτομέρειες Διαδρομής:</b>", info_style)
+            elements.append(details_title)
+            elements.append(Spacer(1, 8))
+            
+            details_style = styles['BodyText']
+            details_para = Paragraph(trip['details'], details_style)
+            elements.append(details_para)
+            elements.append(Spacer(1, 36))
+            
+            # Signature
             signature_path = os.path.join(DATA_DIR, trip['signature'])
             if os.path.exists(signature_path):
-                c.drawImage(signature_path, 100, 650, width=200, height=60)
-            c.save()
-            QMessageBox.information(self, "Εξαγωγή", "Επιτυχής εξαγωγή PDF.")
+                img = Image.open(signature_path)
+                img_width, img_height = img.size
+                aspect = img_height / float(img_width)
+                max_width = 300
+                max_height = max_width * aspect
+                
+                # Draw image
+                c = canvas.Canvas(fname)
+                c.drawImage(signature_path, 100, 150, width=max_width, height=max_height)
+                
+                # Add caption
+                c.setFont("Helvetica", 10)
+                c.drawString(100, 140, "Υπογραφή Οδηγού:")
+                c.save()
+            
+            # Build PDF
+            doc.build(elements)
+            messagebox.showinfo("Εξαγωγή Ολοκληρώθηκε", "Το PDF δημιουργήθηκε επιτυχώς")
+            
+        except Exception as e:
+            log_error(f"PDF export error: {str(e)}")
+            messagebox.showerror("Σφάλμα Εξαγωγής", f"Σφάλμα δημιουργίας PDF: {str(e)}")
 
-    # --- Service Tab (live comboboxes) ---
     def service_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout()
-        title = QLabel("Καταγραφή Service Οχημάτων")
-        title.setFont(QFont("Arial", 18, QFont.Bold))
-        layout.addWidget(title)
-        layout.addSpacing(8)
-        form = QHBoxLayout()
-        self.service_vehicle = QComboBox()
-        self.service_vehicle.addItems([v['plate'] for v in self.vehicles])
-        self.service_date = QDateEdit()
-        self.service_date.setCalendarPopup(True)
-        self.service_date.setDate(QDate.currentDate())
-        self.service_detail = QLineEdit()
-        self.service_detail.setPlaceholderText("Λεπτομέρειες")
-        self.service_add_btn = QPushButton("➕ Καταχώρηση Service")
-        self.service_add_btn.clicked.connect(self.add_service)
-        form.addWidget(self.service_vehicle)
-        form.addWidget(self.service_date)
-        form.addWidget(self.service_detail)
-        form.addWidget(self.service_add_btn)
-        layout.addLayout(form)
-        layout.addSpacing(8)
-        self.service_table = ModernTable(0, 5)
-        self.service_table.setHorizontalHeaderLabels(['Όχημα', 'Ημερομηνία', 'Λεπτομέρειες', 'Επεξεργασία', 'Διαγραφή'])
-        layout.addWidget(self.service_table)
-        w.setLayout(layout)
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Service")
+        
+        # Title
+        title_frame = ttk.Frame(frame)
+        title_frame.pack(fill='x', pady=(0, 10))
+        tk.Label(title_frame, text="Καταγραφή Service Οχημάτων", font=self.title_font).pack(side='left', padx=12, pady=8)
+        
+        # Form
+        form = ttk.Frame(frame)
+        form.pack(fill='x', padx=12, pady=8)
+        
+        # Vehicle
+        vehicle_frame = ttk.Frame(form)
+        vehicle_frame.pack(side='left', padx=10)
+        tk.Label(vehicle_frame, text="Όχημα:").pack(anchor='w')
+        # CORRECTED: Changed ttt.Combobox to ttk.Combobox
+        self.service_vehicle = ttk.Combobox(vehicle_frame, values=[v['plate'] for v in self.vehicles], width=15)
+        self.service_vehicle.pack()
+        
+        # Date
+        date_frame = ttk.Frame(form)
+        date_frame.pack(side='left', padx=10)
+        tk.Label(date_frame, text="Ημερομηνία:").pack(anchor='w')
+        self.service_date = ttk.Entry(date_frame, width=12)
+        self.service_date.pack()
+        self.service_date.insert(0, datetime.date.today().strftime("%Y-%m-%d"))
+        
+        # Details
+        detail_frame = ttk.Frame(form)
+        detail_frame.pack(side='left', padx=10, fill='x', expand=True)
+        tk.Label(detail_frame, text="Λεπτομέρειες:").pack(anchor='w')
+        self.service_detail = ttk.Entry(detail_frame)
+        self.service_detail.pack(fill='x', padx=(0, 10))
+        
+        # Buttons
+        btn_frame = ttk.Frame(form)
+        btn_frame.pack(side='right', padx=20)
+        self.service_add_btn = ttk.Button(btn_frame, text="➕ Καταχώρηση", command=self.add_service)
+        self.service_add_btn.pack(pady=5)
+        
+        # Table
+        self.service_table = self.create_scrollable_table(frame, 
+            ("id", "Όχημα", "Ημερομηνία", "Λεπτομέρειες", "Επεξεργασία", "Διαγραφή"))
+        
+        self.service_table.heading("id", text="ID", anchor='center')
+        self.service_table.heading("Όχημα", text="Όχημα", anchor='w')
+        self.service_table.heading("Ημερομηνία", text="Ημερομηνία", anchor='center')
+        self.service_table.heading("Λεπτομέρειες", text="Λεπτομέρειες", anchor='w')
+        self.service_table.heading("Επεξεργασία", text="Επεξεργασία", anchor='center')
+        self.service_table.heading("Διαγραφή", text="Διαγραφή", anchor='center')
+        
+        # Set column widths
+        self.service_table.column("id", width=50, anchor='center', stretch=False)
+        self.service_table.column("Όχημα", width=150, anchor='w')
+        self.service_table.column("Ημερομηνία", width=120, anchor='center')
+        self.service_table.column("Λεπτομέρειες", width=400, anchor='w')
+        self.service_table.column("Επεξεργασία", width=140, anchor='center')
+        self.service_table.column("Διαγραφή", width=140, anchor='center')
+        self.service_table["displaycolumns"] = ("Όχημα", "Ημερομηνία", "Λεπτομέρειες", "Επεξεργασία", "Διαγραφή")
+        
+        self.service_table.bind('<Button-1>', self.service_table_action)
         self.refresh_service_table()
-        return w
 
     def add_service(self):
-        s = {'vehicle': self.service_vehicle.currentText(),
-             'date': self.service_date.date().toString("yyyy-MM-dd"),
-             'details': self.service_detail.text()}
-        self.services.append(s)
-        save_json('services.json', self.services)
-        self.refresh_service_table()
+        vehicle = self.service_vehicle.get().strip()
+        date = self.service_date.get().strip()
+        details = self.service_detail.get().strip()
+        
+        # Validation
+        if not vehicle:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Επιλέξτε όχημα")
+            return
+            
+        if not validate_date(date):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία (YYYY-MM-DD)")
+            return
+            
+        if not details:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Συμπληρώστε λεπτομέρειες service")
+            return
+            
+        # Generate new ID
+        new_id = max([s['id'] for s in self.services]) + 1 if self.services else 1
+            
+        self.services.append({
+            'id': new_id,
+            'vehicle': vehicle,
+            'date': date,
+            'details': details
+        })
+        
+        if save_json('services.json', self.services):
+            self.service_detail.delete(0, 'end')
+            self.refresh_service_table()
+            messagebox.showinfo("Επιτυχία", "Το service καταχωρήθηκε επιτυχώς")
+
+    def service_table_action(self, event):
+        item = self.service_table.identify_row(event.y)
+        if not item: return
+        
+        col = self.service_table.identify_column(event.x)
+        values = self.service_table.item(item, 'values')
+        row_id = int(values[0]) - 1  # ID is stored as first value
+        
+        # FIXED: Corrected column indices
+        if col == '#4':  # Edit column (Επεξεργασία is #4)
+            self.start_edit_service(row_id)
+        elif col == '#5':  # Delete column (Διαγραφή is #5)
+            self.delete_service(row_id)
 
     def delete_service(self, row):
-        if QMessageBox.question(self, "Διαγραφή Service", "Θέλετε να διαγράψετε το service;") == QMessageBox.Yes:
+        if messagebox.askyesno("Επιβεβαίωση Διαγραφής", "Θέλετε να διαγράψετε αυτό το service;"):
             self.services.pop(row)
-            save_json('services.json', self.services)
-            self.refresh_service_table()
+            if save_json('services.json', self.services):
+                # Reindex IDs
+                for idx, service in enumerate(self.services):
+                    service['id'] = idx + 1
+                save_json('services.json', self.services)
+                self.refresh_service_table()
 
     def refresh_service_table(self):
-        self.service_table.setRowCount(len(self.services))
-        for i, s in enumerate(self.services):
-            self.service_table.setItem(i, 0, QTableWidgetItem(s['vehicle']))
-            self.service_table.setItem(i, 1, QTableWidgetItem(s['date']))
-            self.service_table.setItem(i, 2, QTableWidgetItem(s['details']))
-            edit_btn = QPushButton("✏️")
-            edit_btn.setMaximumWidth(40)
-            edit_btn.clicked.connect(lambda _, row=i: self.start_edit_service(row))
-            del_btn = QPushButton("🗑️")
-            del_btn.setMaximumWidth(40)
-            del_btn.clicked.connect(lambda _, row=i: self.delete_service(row))
-            self.service_table.setCellWidget(i, 3, edit_btn)
-            self.service_table.setCellWidget(i, 4, del_btn)
+        self.service_table.delete(*self.service_table.get_children())
+        for service in self.services:
+            self.service_table.insert('', 'end', values=(
+                service['id'],
+                service['vehicle'],
+                service['date'],
+                service['details'],
+                "✏️ Επεξεργασία",
+                "🗑️ Διαγραφή"
+            ))
 
     def start_edit_service(self, row):
         self.edit_service_row = row
         s = self.services[row]
-        self.service_vehicle.setCurrentText(s['vehicle'])
-        self.service_date.setDate(QDate.fromString(s['date'], "yyyy-MM-dd"))
-        self.service_detail.setText(s['details'])
-        self.tabs.setCurrentIndex(3)
-        self.service_add_btn.setText("💾 Ενημέρωση Service")
-        self.service_add_btn.clicked.disconnect()
-        self.service_add_btn.clicked.connect(self.finish_edit_service)
+        self.service_vehicle.set(s['vehicle'])
+        self.service_date.delete(0, 'end')
+        self.service_date.insert(0, s['date'])
+        self.service_detail.delete(0, 'end')
+        self.service_detail.insert(0, s['details'])
+        self.service_add_btn.config(text="💾 Ενημέρωση", command=self.finish_edit_service)
 
     def finish_edit_service(self):
         row = self.edit_service_row
-        s = {'vehicle': self.service_vehicle.currentText(),
-             'date': self.service_date.date().toString("yyyy-MM-dd"),
-             'details': self.service_detail.text()}
-        self.services[row] = s
-        save_json('services.json', self.services)
-        self.service_detail.clear()
-        self.refresh_service_table()
-        self.edit_service_row = None
-        self.service_add_btn.setText("➕ Καταχώρηση Service")
-        self.service_add_btn.clicked.disconnect()
-        self.service_add_btn.clicked.connect(self.add_service)
+        vehicle = self.service_vehicle.get().strip()
+        date = self.service_date.get().strip()
+        details = self.service_detail.get().strip()
+        
+        # Validation
+        if not vehicle:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Επιλέξτε όχημα")
+            return
+            
+        if not validate_date(date):
+            messagebox.showwarning("Μη έγκυρη ημερομηνία", "Μη έγκυρη ημερομηνία (YYYY-MM-DD)")
+            return
+            
+        if not details:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Συμπληρώστε λεπτομέρειες service")
+            return
+            
+        self.services[row]['vehicle'] = vehicle
+        self.services[row]['date'] = date
+        self.services[row]['details'] = details
+        
+        if save_json('services.json', self.services):
+            self.service_detail.delete(0, 'end')
+            self.refresh_service_table()
+            self.edit_service_row = None
+            self.service_add_btn.config(text="➕ Καταχώρηση", command=self.add_service)
+            messagebox.showinfo("Επιτυχία", "Το service ενημερώθηκε επιτυχώς")
 
-    # --- Live Combobox Updates ---
-    def update_driver_comboboxes(self):
-        # Update trip driver combo live
-        names = [d['name'] for d in self.drivers]
-        current = self.trip_driver.currentText() if hasattr(self, "trip_driver") else ""
-        self.trip_driver.clear()
-        self.trip_driver.addItems(names)
-        if current in names:
-            self.trip_driver.setCurrentText(current)
-
-    def update_vehicle_comboboxes(self):
-        # Update trip and service vehicle combos live
-        plates = [v['plate'] for v in self.vehicles]
-        tcur = self.trip_vehicle.currentText() if hasattr(self, "trip_vehicle") else ""
-        scur = self.service_vehicle.currentText() if hasattr(self, "service_vehicle") else ""
-        self.trip_vehicle.clear()
-        self.trip_vehicle.addItems(plates)
-        self.service_vehicle.clear()
-        self.service_vehicle.addItems(plates)
-        if tcur in plates:
-            self.trip_vehicle.setCurrentText(tcur)
-        if scur in plates:
-            self.service_vehicle.setCurrentText(scur)
-
-    # --- Search Tab ---
     def search_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout()
-        title = QLabel("🔎 Αναζήτηση Σε Όλα Τα Δεδομένα")
-        title.setFont(QFont("Arial", 18, QFont.Bold))
-        layout.addWidget(title)
-        layout.addSpacing(8)
-        search_row = QHBoxLayout()
-        self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Πληκτρολογήστε όνομα, όχημα, κτλ...")
-        self.search_btn = QPushButton("Αναζήτηση")
-        self.search_btn.clicked.connect(self.do_search)
-        search_row.addWidget(self.search_input)
-        search_row.addWidget(self.search_btn)
-        layout.addLayout(search_row)
-        self.search_results = QTextEdit()
-        self.search_results.setReadOnly(True)
-        self.search_results.setMaximumHeight(220)
-        layout.addWidget(self.search_results)
-        w.setLayout(layout)
-        return w
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Αναζήτηση")
+        
+        # Title
+        title_frame = ttk.Frame(frame)
+        title_frame.pack(fill='x', pady=(0, 10))
+        tk.Label(title_frame, text="🔍 Αναζήτηση Σε Όλα Τα Δεδομένα", font=self.title_font).pack(side='left', padx=12, pady=8)
+        
+        # Search form
+        form = ttk.Frame(frame)
+        form.pack(fill='x', padx=12, pady=8)
+        
+        tk.Label(form, text="Αναζήτηση:", width=10).pack(side='left')
+        self.search_input = ttk.Entry(form)
+        self.search_input.pack(side='left', padx=8, fill='x', expand=True)
+        self.search_input.bind('<Return>', lambda e: self.do_search())
+        
+        self.search_btn = ttk.Button(form, text="🔍 Εκτέλεση Αναζήτησης", command=self.do_search)
+        self.search_btn.pack(side='right', padx=8)
+        
+        # Results
+        results_frame = ttk.LabelFrame(frame, text="Αποτελέσματα Αναζήτησης")
+        results_frame.pack(fill='both', expand=True, padx=12, pady=8)
+        
+        self.search_results = ScrolledText(results_frame, font=self.font, state='disabled')
+        self.search_results.pack(fill='both', expand=True, padx=10, pady=10)
 
     def do_search(self):
-        q = self.search_input.text().lower()
+        query = self.search_input.get().strip().lower()
+        if not query:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Εισάγετε όρο αναζήτησης")
+            return
+            
         results = []
+        
+        # Search drivers
         for d in self.drivers:
-            if q in d['name'].lower():
-                results.append(f"[Οδηγός] {d['name']}")
+            if query in d['name'].lower():
+                results.append(f"ΟΔΗΓΟΣ: {d['name']}")
+        
+        # Search vehicles
         for v in self.vehicles:
-            if q in v['plate'].lower() or q in v['kteo_passed'] or q in v['kteo_next']:
-                results.append(f"[Όχημα] {v['plate']} - ΚΤΕΟ Πέρασε: {v['kteo_passed']} Επόμενο: {v['kteo_next']}")
+            plate_match = query in v['plate'].lower()
+            passed_match = query in v['kteo_passed'].lower()
+            next_match = query in v['kteo_next'].lower()
+            
+            if plate_match or passed_match or next_match:
+                status = self.get_kteo_status(v['kteo_next'])
+                status_text, _ = self.get_status_display(status)
+                results.append(f"ΟΧΗΜΑ: {v['plate']} (ΚΤΕΟ: {v['kteo_passed']} - {v['kteo_next']}, Κατάσταση: {status_text})")
+        
+        # Search trips
         for t in self.trips:
-            if q in t['driver'].lower() or q in t['vehicle'].lower() or q in t['details'].lower():
-                results.append(f"[Διαδρομή] Οδηγός: {t['driver']} Όχημα: {t['vehicle']} [{t['depart']} -> {t['arrive']}] {t['details']}")
+            driver_match = query in t['driver'].lower()
+            vehicle_match = query in t['vehicle'].lower()
+            details_match = query in t['details'].lower()
+            depart_match = query in t['depart'].lower()
+            arrive_match = query in t['arrive'].lower()
+            
+            if driver_match or vehicle_match or details_match or depart_match or arrive_match:
+                results.append(f"ΔΙΑΔΡΟΜΗ: {t['driver']} - {t['vehicle']} ({t['depart']} → {t['arrive']})\n   Λεπτομέρειες: {t['details'][:100]}{'...' if len(t['details']) > 100 else ''}")
+        
+        # Search services
         for s in self.services:
-            if q in s['vehicle'].lower() or q in s['details'].lower():
-                results.append(f"[Service] Όχημα: {s['vehicle']} Ημ/νία: {s['date']} {s['details']}")
-        self.search_results.setText('\n'.join(results) if results else "Δεν βρέθηκαν αποτελέσματα.")
+            vehicle_match = query in s['vehicle'].lower()
+            details_match = query in s['details'].lower()
+            date_match = query in s['date'].lower()
+            
+            if vehicle_match or details_match or date_match:
+                results.append(f"SERVICE: {s['vehicle']} ({s['date']})\n   Λεπτομέρειες: {s['details'][:100]}{'...' if len(s['details']) > 100 else ''}")
+        
+        # Display results
+        self.search_results.config(state='normal')
+        self.search_results.delete('1.0', 'end')
+        
+        if results:
+            result_text = "\n\n".join(results)
+            self.search_results.insert('1.0', f"Βρέθηκαν {len(results)} αποτελέσματα:\n\n{result_text}")
+        else:
+            self.search_results.insert('1.0', "Δεν βρέθηκαν αποτελέσματα για την αναζήτησή σας.")
+        
+        self.search_results.config(state='disabled')
 
-    # --- Backup and Import Tab ---
     def backup_tab(self):
-        w = QWidget()
-        layout = QVBoxLayout()
-        title = QLabel("🗄️ Backup & Εισαγωγή Δεδομένων")
-        title.setFont(QFont("Arial", 18, QFont.Bold))
-        layout.addWidget(title)
-        layout.addSpacing(8)
-        backup_btn = QPushButton("Backup δεδομένων σε φάκελο...")
-        backup_btn.clicked.connect(self.do_backup)
-        layout.addWidget(backup_btn)
-        import_btn = QPushButton("Εισαγωγή δεδομένων από φάκελο backup...")
-        import_btn.clicked.connect(self.do_import)
-        layout.addWidget(import_btn)
-        w.setLayout(layout)
-        return w
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Backup")
+        
+        # Title
+        title_frame = ttk.Frame(frame)
+        title_frame.pack(fill='x', pady=(0, 10))
+        tk.Label(title_frame, text="🗄️ Backup & Εισαγωγή Δεδομένων", font=self.title_font).pack(side='left', padx=12, pady=8)
+        
+        # Backup section
+        backup_frame = ttk.LabelFrame(frame, text="Δημιουργία Backup")
+        backup_frame.pack(fill='x', padx=12, pady=8)
+        
+        tk.Label(backup_frame, text="Δημιουργήστε αντίγραφο ασφαλείας των δεδομένων σας:").pack(anchor='w', padx=10, pady=5)
+        
+        self.backup_path = ttk.Entry(backup_frame)
+        self.backup_path.pack(fill='x', padx=10, pady=5)
+        self.backup_path.insert(0, os.path.abspath(BACKUP_DIR))
+        
+        path_btn_frame = ttk.Frame(backup_frame)
+        path_btn_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Button(path_btn_frame, text="📂 Επιλογή Φακέλου", command=self.select_backup_folder).pack(side='left', padx=(0, 10))
+        
+        self.backup_btn = ttk.Button(path_btn_frame, text="💾 Δημιουργία Backup", command=self.do_backup)
+        self.backup_btn.pack(side='right')
+        
+        # Restore section
+        restore_frame = ttk.LabelFrame(frame, text="Επαναφορά Δεδομένων")
+        restore_frame.pack(fill='x', padx=12, pady=8)
+        
+        tk.Label(restore_frame, text="Επαναφέρετε δεδομένα από αντίγραφο ασφαλείας:").pack(anchor='w', padx=10, pady=5)
+        
+        self.restore_path = ttk.Entry(restore_frame)
+        self.restore_path.pack(fill='x', padx=10, pady=5)
+        
+        restore_btn_frame = ttk.Frame(restore_frame)
+        restore_btn_frame.pack(fill='x', padx=10, pady=5)
+        
+        ttk.Button(restore_btn_frame, text="📂 Επιλογή Backup", command=self.select_restore_file).pack(side='left', padx=(0, 10))
+        
+        self.restore_btn = ttk.Button(restore_btn_frame, text="🔄 Επαναφορά Δεδομένων", command=self.do_import)
+        self.restore_btn.pack(side='right')
+        
+        # Info section
+        info_frame = ttk.LabelFrame(frame, text="Πληροφορίες")
+        info_frame.pack(fill='x', padx=12, pady=8)
+        
+        info_text = (
+            "• Τα backups δημιουργούνται στον φάκελο 'vehicle_backups' από προεπιλογή\n"
+            "• Η επαναφορά δεδομένων θα αντικαταστήσει τα τρέχοντα δεδομένα σας\n"
+            "• Κανονικά backups εξασφαλίζουν την προστασία των δεδομένων σας"
+        )
+        tk.Label(info_frame, text=info_text, justify='left').pack(anchor='w', padx=10, pady=10)
+
+    def select_backup_folder(self):
+        folder = filedialog.askdirectory(
+            title="Επιλογή φακέλου για backup",
+            initialdir=BACKUP_DIR
+        )
+        if folder:
+            self.backup_path.delete(0, 'end')
+            self.backup_path.insert(0, folder)
+
+    def select_restore_file(self):
+        file = filedialog.askopenfilename(
+            title="Επιλογή αρχείου backup",
+            initialdir=BACKUP_DIR,
+            filetypes=[("Backup Files", "*.zip")]
+        )
+        if file:
+            self.restore_path.delete(0, 'end')
+            self.restore_path.insert(0, file)
 
     def do_backup(self):
-        folder = QFileDialog.getExistingDirectory(self, "Επιλογή φακέλου backup")
-        if folder:
-            backup_all_data(folder)
-            QMessageBox.information(self, "Backup", "Το backup ολοκληρώθηκε.")
+        folder = self.backup_path.get().strip()
+        if not folder:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Επιλέξτε φάκελο για το backup")
+            return
+            
+        try:
+            os.makedirs(folder, exist_ok=True)
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_name = f"vehicle_backup_{timestamp}.zip"
+            backup_file = os.path.join(folder, backup_name)
+            
+            # Create zip backup
+            shutil.make_archive(backup_file.replace('.zip', ''), 'zip', DATA_DIR)
+            
+            messagebox.showinfo("Backup Ολοκληρώθηκε", f"Το backup δημιουργήθηκε επιτυχώς:\n{backup_file}")
+        except Exception as e:
+            log_error(f"Backup creation error: {str(e)}")
+            messagebox.showerror("Σφάλμα Backup", f"Σφάλμα δημιουργίας backup: {str(e)}")
 
     def do_import(self):
-        folder = QFileDialog.getExistingDirectory(self, "Επιλογή φακέλου backup για εισαγωγή")
-        if folder:
-            imported = import_all_data(folder)
+        backup_file = self.restore_path.get().strip()
+        if not backup_file:
+            messagebox.showwarning("Απαιτούμενο πεδίο", "Επιλέξτε αρχείο backup")
+            return
+            
+        if not backup_file.endswith('.zip'):
+            messagebox.showwarning("Μη έγκυρο αρχείο", "Επιλέξτε έγκυρο αρχείο zip")
+            return
+            
+        if not messagebox.askyesno(
+            "Επιβεβαίωση Επαναφοράς",
+            "Η επαναφορά θα αντικαταστήσει τα τρέχοντα δεδομένα σας. Θέλετε να συνεχίσετε;"
+        ):
+            return
+            
+        try:
+            # Extract backup
+            temp_dir = os.path.join(BACKUP_DIR, "temp_restore")
+            shutil.unpack_archive(backup_file, temp_dir)
+            
+            # Restore files
+            for fname in os.listdir(temp_dir):
+                if fname.endswith('.json'):
+                    src = os.path.join(temp_dir, fname)
+                    dst = os.path.join(DATA_DIR, fname)
+                    shutil.copy2(src, dst)
+            
+            # Clean up
+            shutil.rmtree(temp_dir)
+            
+            # Reload data
             self.reload_all_data()
-            QMessageBox.information(self, "Εισαγωγή", f"Εισαγωγή δεδομένων ολοκληρώθηκε ({len(imported)} αρχεία).")
+            messagebox.showinfo("Επαναφορά Ολοκληρώθηκε", "Τα δεδομένα επαναφέρθηκαν επιτυχώς")
+        except Exception as e:
+            log_error(f"Restore error: {str(e)}")
+            messagebox.showerror("Σφάλμα Επαναφοράς", f"Σφάλμα επαναφοράς δεδομένων: {str(e)}")
+
+    def about_tab(self):
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text="Πληροφορίες")
+        
+        # Title
+        title_frame = ttk.Frame(frame)
+        title_frame.pack(fill='x', pady=(0, 10))
+        tk.Label(title_frame, text="Πληροφορίες Εφαρμογής", font=self.title_font).pack(side='left', padx=12, pady=8)
+        
+        # Content
+        content_frame = ttk.Frame(frame)
+        content_frame.pack(fill='both', expand=True, padx=20, pady=20)
+        
+        info_text = (
+            "Εφαρμογή Διαχείρισης Κίνησης Οχημάτων\n\n"
+            "Έκδοση: 1.0.0\n"
+            "Ημερομηνία Κυκλοφορίας: 2023-12-15\n\n"
+            "Δυνατότητες Εφαρμογής:\n"
+            "• Διαχείριση οδηγών και οχημάτων\n"
+            "• Καταγραφή διαδρομών με υπογραφή οδηγού\n"
+            "• Διαχείριση service και ΚΤΕΟ οχημάτων\n"
+            "• Αναζήτηση σε όλα τα δεδομένα\n"
+            "• Δημιουργία και επαναφορά backups\n\n"
+            "Για υποστήριξη ή αναφορά προβλημάτων:\n"
+            "support@vehiclemanager.gr"
+        )
+        
+        tk.Label(content_frame, text=info_text, justify='left', font=self.font).pack(anchor='w', pady=10)
+        
+        # Footer
+        footer_frame = ttk.Frame(frame)
+        footer_frame.pack(side='bottom', fill='x', pady=10)
+        tk.Label(footer_frame, text="© 2023 Vehicle Manager. Με επιφύλαξη παντός δικαιώματος.").pack()
+
+    def update_driver_comboboxes(self):
+        names = [d['name'] for d in self.drivers]
+        if hasattr(self, "trip_driver"):
+            self.trip_driver['values'] = names
+
+    def update_vehicle_comboboxes(self):
+        plates = [v['plate'] for v in self.vehicles]
+        if hasattr(self, "trip_vehicle"):
+            self.trip_vehicle['values'] = plates
+        if hasattr(self, "service_vehicle"):
+            self.service_vehicle['values'] = plates
 
     def reload_all_data(self):
         self.drivers = load_json('drivers.json')
         self.vehicles = load_json('vehicles.json')
         self.trips = load_json('trips.json')
         self.services = load_json('services.json')
+        
         self.refresh_driver_table()
         self.refresh_vehicle_table()
         self.refresh_trip_table()
         self.refresh_service_table()
+        
         self.update_driver_comboboxes()
         self.update_vehicle_comboboxes()
 
+    def on_close(self):
+        """Handle application close event"""
+        if messagebox.askyesno("Κλείσιμο Εφαρμογής", "Θέλετε να κλείσετε την εφαρμογή;"):
+            self.destroy()
+
 if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    window = VehicleManager()
-    window.show()
-    sys.exit(app.exec_())
+    app = VehicleManager()
+    app.mainloop()
